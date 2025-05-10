@@ -1,8 +1,8 @@
 import logging
 import os
 import sqlite3
-import sys # Добавили для sys.exit()
-import asyncio # Добавили для asyncio.sleep()
+import sys
+import asyncio
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     Application,
@@ -11,7 +11,6 @@ from telegram.ext import (
     filters,
     ContextTypes,
     ConversationHandler,
-    # JobQueue # Неявный импорт через Application.job_queue
 )
 
 # Включаем логирование для отладки
@@ -26,13 +25,13 @@ ORGANIZER_CHAT_ID = os.environ.get("ORGANIZER_CHAT_ID")
 
 if not TELEGRAM_BOT_TOKEN:
     logger.error("Ошибка: Переменная окружения TELEGRAM_BOT_TOKEN не установлена!")
-    sys.exit(1) # Выход, если токен не найден
+    sys.exit(1)
 if not ORGANIZER_CHAT_ID:
     logger.error(
         "Ошибка: Переменная окружения ORGANIZER_CHAT_ID не установлена! "
         "Установите ваш Telegram User ID в качестве значения."
     )
-    sys.exit(1) # Выход, если ID организатора не найден
+    sys.exit(1)
 else:
     try:
         ORGANIZER_CHAT_ID = int(ORGANIZER_CHAT_ID)
@@ -44,6 +43,7 @@ else:
 DB_NAME = "applications_data.db"
 
 def init_db():
+    """Инициализирует базу данных и создает таблицу, если её нет."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute(
@@ -66,6 +66,7 @@ def init_db():
 def save_application_to_db(
     user_id: int, username: str, first_name: str, last_name: str, application_text: str
 ):
+    """Сохраняет заявку пользователя в базу данных."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     try:
@@ -89,10 +90,10 @@ HANDLE_APPLICATION_SUBMISSION = 1
 # --- Обработчики команд и сообщений ---
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Отправляет приветственное сообщение и основную клавиатуру при команде /start."""
     user = update.effective_user
     welcome_message = (
-        f"""
-        "👋 Привет, {user.mention_html()}!\n\n"
+        f"👋 Привет, {user.mention_html()}!\n\n"
         "Это бот для подачи заявок. Пожалуйста, ознакомьтесь с правилами:\n\n"
         "📜 **Правила:**\n"
         "1. Нажмите кнопку 'Подать заявку', чтобы увидеть шаблон.\n"
@@ -111,6 +112,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 async def request_application_action(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
+    """
+    Вызывается при нажатии кнопки 'Подать заявку'.
+    Отправляет шаблон заявки и переходит в состояние ожидания заявки.
+    """
     application_template_message = (
         "📝 **Шаблон для заполнения заявки:**\n\n"
         "Пожалуйста, скопируйте этот шаблон, заполните его и отправьте одним сообщением.\n\n"
@@ -135,6 +140,10 @@ async def request_application_action(
 async def handle_application_message(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
+    """
+    Обрабатывает текстовое сообщение пользователя, которое предполагается является заявкой.
+    Сохраняет заявку в БД и пересылает организатору.
+    """
     user = update.effective_user
     application_text = update.message.text
 
@@ -192,6 +201,7 @@ async def handle_application_message(
 async def cancel_conversation(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
+    """Отменяет текущий диалог подачи заявки."""
     user = update.effective_user
     logger.info(f"Пользователь {user.first_name} (ID: {user.id}) отменил диалог.")
     await update.message.reply_text(
@@ -206,12 +216,14 @@ async def cancel_conversation(
 
 
 async def unknown_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обрабатывает неизвестные команды."""
     await update.message.reply_text(
         "🤷‍♂️ Извините, я не понимаю эту команду. "
         "Используйте /start для начала работы или кнопку 'Подать заявку'."
     )
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Логирует ошибки, вызванные обновлениями."""
     logger.error(msg="Исключение при обработке обновления:", exc_info=context.error)
     if isinstance(update, Update) and update.effective_message:
         try:
@@ -221,16 +233,10 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
         except Exception as e:
             logger.error(f"Не удалось отправить сообщение об ошибке пользователю: {e}")
 
-# --- Функция для инициирования перезапуска ---
 async def initiate_hourly_restart(context: ContextTypes.DEFAULT_TYPE):
-    """
-    Эта функция будет вызвана через час после запуска бота.
-    Она отправит уведомление организатору и завершит процесс бота.
-    Railway должен автоматически перезапустить завершенный процесс.
-    """
+    """Инициирует плановый перезапуск бота."""
     logger.info("Плановый перезапуск через 1 час. Бот будет остановлен для перезагрузки.")
     try:
-        # Уведомляем организатора о предстоящем перезапуске
         await context.bot.send_message(
             chat_id=ORGANIZER_CHAT_ID,
             text="⚙️ Бот будет планово перезапущен через несколько секунд для обновления."
@@ -239,16 +245,14 @@ async def initiate_hourly_restart(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Не удалось отправить сообщение о перезапуске организатору: {e}")
 
-    # Даем небольшую паузу, чтобы сообщение успело отправиться
-    await asyncio.sleep(10) # 10 секунд
+    await asyncio.sleep(10) # Пауза для отправки сообщения
 
     logger.info("Инициирую остановку бота для перезапуска...")
-    # Завершаем процесс. Код 0 обычно означает успешное завершение.
-    # Railway должен это распознать и перезапустить сервис.
-    sys.exit(0)
+    sys.exit(0) # Завершение процесса для перезапуска Railway
 
 
 def main() -> None:
+    """Основная функция для запуска бота."""
     init_db()
 
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
@@ -279,16 +283,16 @@ def main() -> None:
     application.add_handler(MessageHandler(filters.COMMAND, unknown_command_handler))
     application.add_error_handler(error_handler)
 
-    # --- Настройка ежечасного перезапуска ---
-    # Получаем job_queue из application
+    # Настройка ежечасного перезапуска
+    # Убедитесь, что в requirements.txt указано: python-telegram-bot[job-queue]
     job_queue = application.job_queue
+    if job_queue: # Проверка, что job_queue успешно инициализирован
+        job_queue.run_once(initiate_hourly_restart, 3600, name="hourly_restart_job")
+        logger.info("Запланирована задача на ежечасный перезапуск бота.")
+    else:
+        logger.warning("JobQueue не настроен. Ежечасный перезапуск не будет работать. "
+                       "Проверьте установку: pip install python-telegram-bot[job-queue]")
 
-    # Планируем выполнение функции initiate_hourly_restart через 3600 секунд (1 час)
-    # `run_once` выполнит задачу один раз после указанной задержки.
-    # После перезапуска бота Railway, эта логика снова настроит задачу на следующий час.
-    job_queue.run_once(initiate_hourly_restart, 3600, name="hourly_restart_job")
-    logger.info("Запланирована задача на ежечасный перезапуск бота.")
-    # -------------------------------------
 
     logger.info("Запуск бота...")
     application.run_polling()
