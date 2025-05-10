@@ -91,13 +91,7 @@ HANDLE_APPLICATION_SUBMISSION = 1
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.effective_user
     welcome_message = (
-        f"```
-        __      __   _                       _   
-\ \    / /  | |                     | |  
- \ \  / /_ _| | ___  _ __ __ _ _ __ | |_ 
-  \ \/ / _ | |/ _ \| '__/ _ | '_ \| __|
-   \  / (_| | | (_) | | | (_| | | | | |_ 
-    \/ \__,_|_|\___/|_|  \__,_|_| |_|\__| ``` \n\n"
+        f"""
         "👋 Привет, {user.mention_html()}!\n\n"
         "Это бот для подачи заявок. Пожалуйста, ознакомьтесь с правилами:\n\n"
         "📜 **Правила:**\n"
