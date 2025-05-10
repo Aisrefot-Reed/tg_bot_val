@@ -1,6 +1,8 @@
 import logging
 import os
 import sqlite3
+import sys # Добавили для sys.exit()
+import asyncio # Добавили для asyncio.sleep()
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     Application,
@@ -9,6 +11,7 @@ from telegram.ext import (
     filters,
     ContextTypes,
     ConversationHandler,
+    # JobQueue # Неявный импорт через Application.job_queue
 )
 
 # Включаем логирование для отладки
@@ -18,33 +21,29 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- Конфигурация ---
-# Токен бота и ID чата организатора берем из переменных окружения
-# Это лучшая практика для безопасности и для Railway
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 ORGANIZER_CHAT_ID = os.environ.get("ORGANIZER_CHAT_ID")
 
 if not TELEGRAM_BOT_TOKEN:
     logger.error("Ошибка: Переменная окружения TELEGRAM_BOT_TOKEN не установлена!")
-    exit()
+    sys.exit(1) # Выход, если токен не найден
 if not ORGANIZER_CHAT_ID:
     logger.error(
         "Ошибка: Переменная окружения ORGANIZER_CHAT_ID не установлена! "
         "Установите ваш Telegram User ID в качестве значения."
     )
-    # Чтобы получить свой User ID, можно написать боту @userinfobot в Telegram
-    exit()
+    sys.exit(1) # Выход, если ID организатора не найден
 else:
     try:
         ORGANIZER_CHAT_ID = int(ORGANIZER_CHAT_ID)
     except ValueError:
         logger.error("Ошибка: ORGANIZER_CHAT_ID должен быть числом (вашим Telegram User ID)!")
-        exit()
+        sys.exit(1)
 
 # --- Настройка базы данных (SQLite) ---
 DB_NAME = "applications_data.db"
 
 def init_db():
-    """Инициализирует базу данных и создает таблицу, если её нет."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute(
@@ -67,7 +66,6 @@ def init_db():
 def save_application_to_db(
     user_id: int, username: str, first_name: str, last_name: str, application_text: str
 ):
-    """Сохраняет заявку пользователя в базу данных."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     try:
@@ -85,15 +83,12 @@ def save_application_to_db(
     finally:
         conn.close()
 
-
 # --- Состояния для ConversationHandler ---
-# Используем числовые состояния для простоты
-HANDLE_APPLICATION_SUBMISSION = 1  # Состояние ожидания текста заявки
+HANDLE_APPLICATION_SUBMISSION = 1
 
 # --- Обработчики команд и сообщений ---
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Отправляет приветственное сообщение и основную клавиатуру при команде /start."""
     user = update.effective_user
     welcome_message = (
         f"👋 Привет, {user.mention_html()}!\n\n"
@@ -104,24 +99,17 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         "3. Ваша заявка будет автоматически переслана организатору.\n\n"
         "Удачи!"
     )
-    # Создаем клавиатуру с одной кнопкой
     keyboard = [[KeyboardButton("Подать заявку")]]
     reply_markup = ReplyKeyboardMarkup(
         keyboard, one_time_keyboard=False, resize_keyboard=True
     )
-
     await update.message.reply_html(welcome_message, reply_markup=reply_markup)
-    # Завершаем любую предыдущую беседу, если она была
     return ConversationHandler.END
 
 
 async def request_application_action(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
-    """
-    Вызывается при нажатии кнопки 'Подать заявку'.
-    Отправляет шаблон заявки и переходит в состояние ожидания заявки.
-    """
     application_template_message = (
         "📝 **Шаблон для заполнения заявки:**\n\n"
         "Пожалуйста, скопируйте этот шаблон, заполните его и отправьте одним сообщением.\n\n"
@@ -140,28 +128,22 @@ async def request_application_action(
         "🕒 **Ожидаю вашу заполненную заявку...**"
     )
     await update.message.reply_text(application_template_message)
-    # Переходим в состояние ожидания текста заявки
     return HANDLE_APPLICATION_SUBMISSION
 
 
 async def handle_application_message(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
-    """
-    Обрабатывает текстовое сообщение пользователя, которое предполагается является заявкой.
-    Сохраняет заявку в БД и пересылает организатору.
-    """
     user = update.effective_user
     application_text = update.message.text
 
-    if not application_text or len(application_text.strip()) < 20:  # Простая валидация
+    if not application_text or len(application_text.strip()) < 20:
         await update.message.reply_text(
             "❗️ Ваша заявка кажется слишком короткой или пустой. "
             "Пожалуйста, убедитесь, что вы заполнили все поля шаблона и попробуйте снова."
         )
-        return HANDLE_APPLICATION_SUBMISSION # Остаемся в том же состоянии, ожидая корректную заявку
+        return HANDLE_APPLICATION_SUBMISSION
 
-    # Сохраняем заявку в базу данных
     save_application_to_db(
         user_id=user.id,
         username=user.username or "N/A",
@@ -170,13 +152,11 @@ async def handle_application_message(
         application_text=application_text,
     )
 
-    # Отправляем подтверждение пользователю
     await update.message.reply_text(
         "✅ Спасибо! Ваша заявка принята и успешно отправлена организатору.\n"
         "Ожидайте ответа."
     )
 
-    # Формируем сообщение для организатора
     organizer_message = (
         f"🔔 **Новая заявка!** 🔔\n\n"
         f"👤 **От пользователя:**\n"
@@ -184,10 +164,8 @@ async def handle_application_message(
         f"   - Username: @{user.username if user.username else 'Не указан'}\n"
         f"   - Имя: {user.first_name} {user.last_name or ''}\n\n"
         f"📝 **Текст заявки:**\n"
-        f"```\n{application_text}\n```" # Используем Markdown для лучшего форматирования
+        f"```\n{application_text}\n```"
     )
-
-    # Отправляем заявку организатору
     try:
         await context.bot.send_message(
             chat_id=ORGANIZER_CHAT_ID, text=organizer_message, parse_mode="Markdown"
@@ -195,12 +173,10 @@ async def handle_application_message(
         logger.info(f"Заявка от user_id: {user.id} переслана организатору (ID: {ORGANIZER_CHAT_ID}).")
     except Exception as e:
         logger.error(f"Не удалось отправить заявку организатору: {e}")
-        # Уведомляем пользователя о проблеме с пересылкой, если она произошла
         await update.message.reply_text(
             "⚠️ Произошла ошибка при пересылке вашей заявки организатору. "
             "Пожалуйста, попробуйте подать заявку позже или свяжитесь с поддержкой."
         )
-        # Можно также отправить сообщение об ошибке организатору, если это не он сам себе отправляет
         if str(user.id) != str(ORGANIZER_CHAT_ID):
             try:
                 await context.bot.send_message(
@@ -209,16 +185,12 @@ async def handle_application_message(
                 )
             except Exception as e_admin:
                 logger.error(f"Не удалось уведомить организатора об ошибке пересылки: {e_admin}")
-
-
-    # Завершаем беседу
     return ConversationHandler.END
 
 
 async def cancel_conversation(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
-    """Отменяет текущий диалог подачи заявки."""
     user = update.effective_user
     logger.info(f"Пользователь {user.first_name} (ID: {user.id}) отменил диалог.")
     await update.message.reply_text(
@@ -233,17 +205,13 @@ async def cancel_conversation(
 
 
 async def unknown_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обрабатывает неизвестные команды."""
     await update.message.reply_text(
         "🤷‍♂️ Извините, я не понимаю эту команду. "
         "Используйте /start для начала работы или кнопку 'Подать заявку'."
     )
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Логирует ошибки, вызванные обновлениями, и уведомляет пользователя/организатора."""
     logger.error(msg="Исключение при обработке обновления:", exc_info=context.error)
-
-    # Попытка уведомить пользователя об ошибке
     if isinstance(update, Update) and update.effective_message:
         try:
             await update.effective_message.reply_text(
@@ -252,27 +220,38 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
         except Exception as e:
             logger.error(f"Не удалось отправить сообщение об ошибке пользователю: {e}")
 
-    # Уведомление организатора о критической ошибке (опционально, чтобы не спамить)
-    # Можно добавить условия, при каких ошибках отправлять
-    # try:
-    #     await context.bot.send_message(
-    #         chat_id=ORGANIZER_CHAT_ID,
-    #         text=f"🔴 КРИТИЧЕСКАЯ ОШИБКА В БОТЕ:\n<pre>{context.error}</pre>", # Используем pre для сохранения форматирования ошибки
-    #         parse_mode="HTML"
-    #     )
-    # except Exception as e:
-    #     logger.error(f"Не удалось отправить уведомление об ошибке организатору: {e}")
+# --- Функция для инициирования перезапуска ---
+async def initiate_hourly_restart(context: ContextTypes.DEFAULT_TYPE):
+    """
+    Эта функция будет вызвана через час после запуска бота.
+    Она отправит уведомление организатору и завершит процесс бота.
+    Railway должен автоматически перезапустить завершенный процесс.
+    """
+    logger.info("Плановый перезапуск через 1 час. Бот будет остановлен для перезагрузки.")
+    try:
+        # Уведомляем организатора о предстоящем перезапуске
+        await context.bot.send_message(
+            chat_id=ORGANIZER_CHAT_ID,
+            text="⚙️ Бот будет планово перезапущен через несколько секунд для обновления."
+        )
+        logger.info(f"Уведомление о перезапуске отправлено организатору (ID: {ORGANIZER_CHAT_ID}).")
+    except Exception as e:
+        logger.error(f"Не удалось отправить сообщение о перезапуске организатору: {e}")
+
+    # Даем небольшую паузу, чтобы сообщение успело отправиться
+    await asyncio.sleep(10) # 10 секунд
+
+    logger.info("Инициирую остановку бота для перезапуска...")
+    # Завершаем процесс. Код 0 обычно означает успешное завершение.
+    # Railway должен это распознать и перезапустить сервис.
+    sys.exit(0)
 
 
 def main() -> None:
-    """Основная функция для запуска бота."""
-    # Инициализация БД перед запуском бота
     init_db()
 
-    # Создаем объект Application и передаем ему токен бота
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-    # Определяем ConversationHandler для процесса подачи заявки
     conv_handler = ConversationHandler(
         entry_points=[
             MessageHandler(
@@ -288,24 +267,28 @@ def main() -> None:
             ],
         },
         fallbacks=[
-            CommandHandler("start", start_command), # Позволяет перезапустить с /start
-            CommandHandler("cancel", cancel_conversation), # Команда для отмены
-            MessageHandler(filters.Regex("^Подать заявку$"), request_application_action) # Если снова нажмет кнопку в процессе
+            CommandHandler("start", start_command),
+            CommandHandler("cancel", cancel_conversation),
+            MessageHandler(filters.Regex("^Подать заявку$"), request_application_action)
         ],
-        # allow_reentry=True # Можно разрешить повторный вход в диалог той же командой
     )
 
-    # Добавляем обработчики в диспетчер
     application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(conv_handler) # Добавляем наш ConversationHandler
-
-    # Обработчик для неизвестных команд (должен идти после других командных хендлеров)
+    application.add_handler(conv_handler)
     application.add_handler(MessageHandler(filters.COMMAND, unknown_command_handler))
-
-    # Добавляем обработчик ошибок
     application.add_error_handler(error_handler)
 
-    # Запускаем бота (в режиме polling)
+    # --- Настройка ежечасного перезапуска ---
+    # Получаем job_queue из application
+    job_queue = application.job_queue
+
+    # Планируем выполнение функции initiate_hourly_restart через 3600 секунд (1 час)
+    # `run_once` выполнит задачу один раз после указанной задержки.
+    # После перезапуска бота Railway, эта логика снова настроит задачу на следующий час.
+    job_queue.run_once(initiate_hourly_restart, 3600, name="hourly_restart_job")
+    logger.info("Запланирована задача на ежечасный перезапуск бота.")
+    # -------------------------------------
+
     logger.info("Запуск бота...")
     application.run_polling()
 
